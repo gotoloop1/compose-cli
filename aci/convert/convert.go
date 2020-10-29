@@ -23,6 +23,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/services/containerinstance/mgmt/2018-10-01/containerinstance"
 	"github.com/Azure/go-autorest/autorest/to"
@@ -110,6 +111,8 @@ func ToContainerGroup(ctx context.Context, aciContext store.AciContext, p types.
 			dnsLabelName = serviceDomainName
 		}
 
+		containerDefinition.LivenessProbe = service.getLivenessProbe()
+
 		containers = append(containers, containerDefinition)
 	}
 	if len(groupPorts) > 0 {
@@ -126,6 +129,14 @@ func ToContainerGroup(ctx context.Context, aciContext store.AciContext, p types.
 	groupDefinition.ContainerGroupProperties.Containers = &containers
 
 	return groupDefinition, nil
+}
+
+func durationToSeconds(d *types.Duration) *int32 {
+	if d == nil {
+		return nil
+	}
+	v := int32(time.Duration(*d).Seconds())
+	return &v
 }
 
 func getDNSSidecar(containers []containerinstance.Container) containerinstance.Container {
@@ -237,6 +248,35 @@ func (s serviceConfigAciHelper) getResourceRequestsLimits() (*containerinstance.
 	return &resources, nil
 }
 
+func (s serviceConfigAciHelper) getLivenessProbe() *containerinstance.ContainerProbe {
+	if s.HealthCheck != nil && !s.HealthCheck.Disable && len(s.HealthCheck.Test) > 0 {
+		testArray := s.HealthCheck.Test
+		switch s.HealthCheck.Test[0] {
+		case "NONE", "CMD", "CMD-SHELL":
+			testArray = s.HealthCheck.Test[1:]
+		}
+		if len(testArray) == 0 {
+			return nil
+		}
+
+		var retries int32 = 10
+		if s.HealthCheck.Retries != nil {
+			retries = int32(*s.HealthCheck.Retries)
+		}
+		return &containerinstance.ContainerProbe{
+			Exec: &containerinstance.ContainerExec{
+				Command: to.StringSlicePtr(testArray),
+			},
+			InitialDelaySeconds: durationToSeconds(s.HealthCheck.StartPeriod),
+			PeriodSeconds:       durationToSeconds(s.HealthCheck.Interval),
+			FailureThreshold:    to.Int32Ptr(retries),
+			SuccessThreshold:    to.Int32Ptr(retries),
+			TimeoutSeconds:      durationToSeconds(s.HealthCheck.Timeout),
+		}
+	}
+	return nil
+}
+
 func getEnvVariables(composeEnv types.MappingWithEquals) *[]containerinstance.EnvironmentVariable {
 	result := []containerinstance.EnvironmentVariable{}
 	for key, value := range composeEnv {
@@ -310,6 +350,22 @@ func ContainerGroupToContainer(containerID string, cg containerinstance.Containe
 		FQDN: fqdn(cg, region),
 		Env:  envVars,
 	}
+
+	healthcheckDisabled := true
+	var healthcheckTest []string
+	var healthcheckInterval types.Duration
+	if cc.ReadinessProbe != nil &&
+		cc.ReadinessProbe.Exec != nil &&
+		cc.ReadinessProbe.Exec.Command != nil {
+		if len(*cc.ReadinessProbe.Exec.Command) > 0 {
+			healthcheckDisabled = false
+			healthcheckTest = *cc.ReadinessProbe.Exec.Command
+			if cc.ReadinessProbe.PeriodSeconds != nil {
+				healthcheckInterval = types.Duration(int64(*cc.ReadinessProbe.PeriodSeconds) * int64(time.Second))
+			}
+		}
+	}
+
 	c := containers.Container{
 		ID:          containerID,
 		Status:      status,
@@ -323,6 +379,11 @@ func ContainerGroupToContainer(containerID string, cg containerinstance.Containe
 		Platform:    platform,
 		Config:      config,
 		HostConfig:  hostConfig,
+		Healthcheck: containers.Healthcheck{
+			Disable:  healthcheckDisabled,
+			Test:     healthcheckTest,
+			Interval: healthcheckInterval,
+		},
 	}
 
 	return c

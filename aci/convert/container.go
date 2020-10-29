@@ -52,6 +52,11 @@ func ContainerToComposeProject(r containers.ContainerConfig) (types.Project, err
 				Volumes:     serviceConfigVolumes,
 				DomainName:  r.DomainName,
 				Environment: toComposeEnvs(r.Environment),
+				HealthCheck: &types.HealthCheckConfig{
+					Test:     r.Healthcheck.Test,
+					Interval: &r.Healthcheck.Interval,
+					Disable:  r.Healthcheck.Disable,
+				},
 				Deploy: &types.DeployConfig{
 					Resources: types.Resources{
 						Reservations: &types.Resource{
