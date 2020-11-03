@@ -238,6 +238,7 @@ func (s sdk) StackExists(ctx context.Context, name string) (bool, error) {
 type uploadedTemplateFunc func(ctx context.Context, name string, url string) (string, error)
 
 func (s sdk) withTemplate(ctx context.Context, name string, template []byte, fn uploadedTemplateFunc) (string, error) {
+	logrus.Debug("Create s3 bucket to store cloudformation template")
 	_, err := s.S3.CreateBucket(&s3.CreateBucketInput{
 		Bucket: aws.String("com.docker.compose"),
 	})
@@ -324,6 +325,9 @@ func (s sdk) CreateChangeSet(ctx context.Context, name string, template []byte) 
 		}
 		return aws.StringValue(changeset.Id), err
 	})
+	if err != nil {
+		return "", err
+	}
 
 	err = s.CF.WaitUntilChangeSetCreateCompleteWithContext(ctx, &cloudformation.DescribeChangeSetInput{
 		ChangeSetName: aws.String(changeset),
